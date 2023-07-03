@@ -1,10 +1,9 @@
-package com.github.timepsilon.lifelink.common;
+package com.github.timepsilon.lifelink.common.events;
 
 import com.github.timepsilon.lifelink.Lifelink;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.entity.TamableAnimal;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
@@ -22,33 +21,25 @@ public class TamedAnimalChecker {
     private static final int INTERVAL = 100;
     private static final AttributeModifier damageModifier = new AttributeModifier("modified_attack_damage",-0.5, AttributeModifier.Operation.MULTIPLY_TOTAL);
     private static final AttributeModifier healthModifier = new AttributeModifier("modified_max_health",-0.5, AttributeModifier.Operation.MULTIPLY_TOTAL);
-    private static final AttributeModifier armorModifier = new AttributeModifier("modified_armor",-0.9, AttributeModifier.Operation.MULTIPLY_TOTAL);
 
     @SubscribeEvent
     public static void onPlayerTick(TickEvent.PlayerTickEvent event) {
         if (event.phase == TickEvent.Phase.END && !event.player.level.isClientSide()) {
             if (event.player.level.getGameTime() % INTERVAL == 0) {
-                checkNearbyAnimals(event.player);
+                applyPenalty(event.player);
             }
         }
     }
 
-    private static void checkNearbyAnimals(Player player) {
-        boolean found = false;
+    private static void applyPenalty(Player player) {
 
-        for (TamableAnimal entity : player.level.getEntitiesOfClass(TamableAnimal.class,player.getBoundingBox().inflate(64))) {
-            if (entity.isTame() && entity.getOwner() == player) {
-                found = true;
-                break;
-            }
-        }
+        if (player.isDeadOrDying()) return;
+
+        boolean found = checkIfTamedNearby(player);
 
         if (found) {
             if (player.getAttribute(Attributes.ATTACK_DAMAGE).hasModifier(damageModifier))
                 player.getAttribute(Attributes.ATTACK_DAMAGE).removeModifier(damageModifier);
-
-            if (player.getAttribute(Attributes.ARMOR).hasModifier(armorModifier))
-                player.getAttribute(Attributes.ARMOR).removeModifier(armorModifier);
 
             if (player.getAttribute(Attributes.MAX_HEALTH).hasModifier(healthModifier))
                 player.getAttribute(Attributes.MAX_HEALTH).removeModifier(healthModifier);
@@ -58,9 +49,6 @@ public class TamedAnimalChecker {
             if (!player.getAttribute(Attributes.ATTACK_DAMAGE).hasModifier(damageModifier))
                 player.getAttribute(Attributes.ATTACK_DAMAGE).addTransientModifier(damageModifier);
 
-            if (!player.getAttribute(Attributes.ARMOR).hasModifier(armorModifier))
-                player.getAttribute(Attributes.ARMOR).addTransientModifier(armorModifier);
-
             if (!player.getAttribute(Attributes.MAX_HEALTH).hasModifier(healthModifier)) {
                 player.getAttribute(Attributes.MAX_HEALTH).addTransientModifier(healthModifier);
                 player.setHealth(player.getMaxHealth());
@@ -68,8 +56,21 @@ public class TamedAnimalChecker {
 
             Component warning = Component.literal("§c (!) No tamed animal found!");
             player.displayClientMessage(warning,true);
-            player.playSound(SoundEvents.GOAT_AMBIENT,1,0.5f);
+            player.playSound(SoundEvents.GOAT_SCREAMING_DEATH,2,0.5f);
         }
+    }
+
+    public static boolean checkIfTamedNearby(Player player) {
+        boolean found = false;
+
+        for (TamableAnimal entity : player.level.getEntitiesOfClass(TamableAnimal.class,player.getBoundingBox().inflate(64))) {
+            if (entity.isTame() && entity.getOwner() == player && !entity.isDeadOrDying()) {
+                found = true;
+                break;
+            }
+        }
+
+        return found;
     }
 
     @SubscribeEvent
@@ -77,11 +78,15 @@ public class TamedAnimalChecker {
         if (event.getEntity() instanceof TamableAnimal animal) {
             if (animal.isTame() && animal.getOwner() instanceof ServerPlayer player) {
                 if (animal.getServer().getPlayerList().getPlayer(player.getUUID()) != null) {
-                    player.kill();
 
-                    Component deathMessage = Component.literal("§c " + animal.getDisplayName().getString() + " died!");
-                    ClientboundSetTitleTextPacket packet = new ClientboundSetTitleTextPacket(deathMessage);
-                    player.connection.send(packet);
+                    if (!checkIfTamedNearby(player)) {
+                        player.kill();
+
+                        Component deathMessage = Component.literal("§c " + animal.getDisplayName().getString() + " died!");
+                        ClientboundSetTitleTextPacket packet = new ClientboundSetTitleTextPacket(deathMessage);
+                        player.connection.send(packet);
+                        player.playSound(SoundEvents.LIGHTNING_BOLT_IMPACT,2,0.5f);
+                    }
                 }
             }
         }
